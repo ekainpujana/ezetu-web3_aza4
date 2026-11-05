@@ -149,7 +149,8 @@ export function MapView({ refreshKey }: { refreshKey?: number }) {
   const cardRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const boundsVersionRef = useRef(0);
   const leftPanelRef = useRef<HTMLDivElement>(null);
-  const clusterLayerRef = useRef<L.LayerGroup | null>(null);
+  const markersGroupRef = useRef<L.LayerGroup | null>(null);
+  const clusterMarkersRef = useRef<L.Marker[]>([]);
 
   // Init Leaflet map — free OSM tiles, Western Europe center
   useEffect(() => {
@@ -174,6 +175,7 @@ export function MapView({ refreshKey }: { refreshKey?: number }) {
       maxZoom: 19,
     }).addTo(m);
     map.current = m;
+    markersGroupRef.current = L.layerGroup().addTo(m);
 
     requestAnimationFrame(() => {
       m.invalidateSize();
@@ -258,14 +260,20 @@ export function MapView({ refreshKey }: { refreshKey?: number }) {
   const topSpots = useMemo(() => visibleRankedSpots.slice(0, MAX_LIST_SPOTS), [visibleRankedSpots]);
   const totalVisible = visibleRankedSpots.length;
 
+  const clusters = useMemo(
+    () => (zoom < LOCAL_MIN_ZOOM ? buildClusters(visibleRankedSpots, zoom, lang) : []),
+    [visibleRankedSpots, zoom, lang],
+  );
+  const showPins = zoom >= LOCAL_MIN_ZOOM || clusters.length === 0;
+
   // Render markers for every valid spot — respects pin mode + category colors
   useEffect(() => {
-    const m = map.current;
-    if (!m) return;
-    const pinned = zoom >= LOCAL_MIN_ZOOM ? visibleRankedSpots : [];
+    const group = markersGroupRef.current;
+    if (!group) return;
+    const pinned = showPins ? visibleRankedSpots : [];
     const visibleIds = new Set(pinned.map((s) => s.id));
     markersRef.current.forEach((mk, id) => {
-      if (!visibleIds.has(id)) { m.removeLayer(mk); markersRef.current.delete(id); }
+      if (!visibleIds.has(id)) { group.removeLayer(mk); markersRef.current.delete(id); }
     });
     pinned.forEach((s) => {
       const existing = markersRef.current.get(s.id);
@@ -288,7 +296,7 @@ export function MapView({ refreshKey }: { refreshKey?: number }) {
       if (existing) {
         existing.setIcon(icon);
       } else {
-        const mk = L.marker([s.latitude, s.longitude], { icon }).addTo(m);
+        const mk = L.marker([s.latitude, s.longitude], { icon }).addTo(group);
         const label = lang === 'EUS' && s.euskal_herria ? basqueName(s.id, s.name) : s.name;
         mk.bindPopup(`<div style="font-weight:600;font-size:13px">${label}<br/><span style="font-weight:400;font-size:11px;opacity:.7">${getLocalizedCountry(s, lang).name}</span></div>`);
         mk.on('click', () => { setSelected(s); setFocusedSpotId(s.id); });
@@ -297,23 +305,21 @@ export function MapView({ refreshKey }: { refreshKey?: number }) {
         markersRef.current.set(s.id, mk);
       }
     });
-  }, [visibleRankedSpots, hovered, focusedSpotId, visitedIds, savedIds, setFocusedSpotId, lang, pinMode, zoom]);
+  }, [visibleRankedSpots, hovered, focusedSpotId, visitedIds, savedIds, setFocusedSpotId, lang, pinMode, showPins]);
 
   // Country / province cluster pills below the local zoom level
   useEffect(() => {
+    const group = markersGroupRef.current;
     const m = map.current;
-    if (!m) return;
-    if (!clusterLayerRef.current) clusterLayerRef.current = L.layerGroup().addTo(m);
-    const layer = clusterLayerRef.current;
-    layer.clearLayers();
-    if (zoom >= LOCAL_MIN_ZOOM) return;
-    buildClusters(visibleRankedSpots, zoom, lang).forEach((c) => {
+    if (!group || !m) return;
+    clusterMarkersRef.current.forEach((mk) => group.removeLayer(mk));
+    clusterMarkersRef.current = clusters.map((c) => {
       const icon = L.divIcon({ className: '', html: clusterPillHtml(c), iconSize: [0, 0] });
-      L.marker(c.bounds.getCenter(), { icon })
+      return L.marker(c.bounds.getCenter(), { icon })
         .on('click', () => m.flyToBounds(c.bounds.pad(0.3), { duration: 0.8, maxZoom: LOCAL_MIN_ZOOM + 1 }))
-        .addTo(layer);
+        .addTo(group);
     });
-  }, [visibleRankedSpots, zoom, lang]);
+  }, [clusters]);
 
   // Auto-center bounds when visited or saved layer is activated
   useEffect(() => {
