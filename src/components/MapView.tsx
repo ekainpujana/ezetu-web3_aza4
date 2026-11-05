@@ -52,6 +52,10 @@ function isValidCoord(lat: unknown, lng: unknown): boolean {
     && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
 }
 
+const IKURRINA_BODY = '<rect width="280" height="140" fill="#D52B1E"/><path d="M0,0 L14,0 L280,126 L280,140 L266,140 L0,14 Z" fill="#009B48"/><path d="M266,0 L280,0 L280,14 L14,140 L0,140 L0,126 Z" fill="#009B48"/><rect x="130" width="20" height="140" fill="#FFFFFF"/><rect y="60" width="280" height="20" fill="#FFFFFF"/>';
+
+const ikurrinaSvg = (attrs: string) => `<svg viewBox="0 0 280 140" ${attrs} preserveAspectRatio="xMidYMid meet" shape-rendering="geometricPrecision">${IKURRINA_BODY}</svg>`;
+
 function buildPinHtml(spot: Spot, mode: PinMode, size: number, isActive: boolean, lang: string): string {
   const color = CAT_COLORS[spot.category] ?? '#64748b';
   const ringSize = isActive ? 4 : 2;
@@ -71,7 +75,7 @@ function buildPinHtml(spot: Spot, mode: PinMode, size: number, isActive: boolean
   // Flags mode
   const isEusSpot = lang === 'EUS' && spot.euskal_herria;
   const flagSvg = isEusSpot
-    ? '<svg viewBox="0 0 280 140" width="100%" height="100%" style="border-radius:2px;overflow:hidden;display:block" shape-rendering="geometricPrecision" preserveAspectRatio="xMidYMid meet"><rect width="280" height="140" fill="#D52B1E"/><path d="M0,0 L14,0 L280,126 L280,140 L266,140 L0,14 Z" fill="#009B48"/><path d="M266,0 L280,0 L280,14 L14,140 L0,140 L0,126 Z" fill="#009B48"/><rect x="130" width="20" height="140" fill="#FFFFFF"/><rect y="60" width="280" height="20" fill="#FFFFFF"/></svg>'
+    ? ikurrinaSvg('width="100%" height="100%" style="border-radius:2px;overflow:hidden;display:block"')
     : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:${innerSize * 0.7}px;line-height:1;overflow:hidden;border-radius:2px">${flagEmoji(spot.country_code)}</div>`;
 
   return `<div style="
@@ -106,7 +110,7 @@ function buildClusters(spots: Spot[], zoom: number, lang: LangCode): SpotCluster
     const countryKey = isEH ? 'EH' : s.country_code;
     const place = zoom >= PROVINCE_MIN_ZOOM ? (s.province ?? s.comarca) : null;
     const key = place ? `${countryKey}|${place}` : countryKey;
-    const group = groups.get(key) ?? { label: place ?? name, icon: isEH ? '🏴' : flagEmoji(s.country_code), spots: [] };
+    const group = groups.get(key) ?? { label: place ?? name, icon: isEH ? ikurrinaSvg('width="20" height="13" style="border-radius:2px;display:block"') : flagEmoji(s.country_code), spots: [] };
     group.spots.push(s);
     groups.set(key, group);
   }
@@ -121,10 +125,10 @@ function buildClusters(spots: Spot[], zoom: number, lang: LangCode): SpotCluster
 
 function clusterPillHtml(c: SpotCluster): string {
   return `<div style="transform:translate(-50%,-50%);white-space:nowrap">
-    <div class="flex items-center gap-1.5 rounded-full px-3 py-1.5 font-semibold text-xs sm:text-sm shadow-xl transition-transform hover:scale-110 cursor-pointer" style="background:#0f172a;border:2px solid #10b981;color:#ffffff">
-      <span>${c.icon}</span>
-      <span>${escapeHtml(c.label)}</span>
-      <span class="rounded-full px-1.5 text-[11px] font-bold leading-4" style="background:#10b981;color:#0f172a">${c.count}</span>
+    <div class="hover:scale-110 transition-transform" style="display:inline-flex;align-items:center;gap:8px;background-color:#0f172a;color:#ffffff;border:2px solid #10b981;border-radius:9999px;padding:5px 12px;box-shadow:0 4px 15px rgba(0,0,0,0.5);font-family:system-ui,-apple-system,sans-serif;font-size:13px;font-weight:700;white-space:nowrap;user-select:none;cursor:pointer">
+      <span style="display:flex;align-items:center;justify-content:center;flex-shrink:0">${c.icon}</span>
+      <span style="color:#ffffff;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,0.8)">${escapeHtml(c.label)}</span>
+      <span style="background-color:#10b981;color:#0f172a;font-weight:800;font-size:11px;padding:2px 7px;border-radius:9999px;margin-left:2px">${c.count}</span>
     </div>
   </div>`;
 }
