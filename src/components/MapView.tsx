@@ -13,7 +13,7 @@ try {
     shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
   });
 } catch { /* leaflet icon fix — safe to ignore */ }
-import type { Spot } from '@/lib/types';
+import type { LangCode, Spot } from '@/lib/types';
 import { useApp } from '@/lib/app-context';
 import { useSpots, type SpotWithRelations } from '@/lib/data';
 import { categoryColor, flagEmoji, basqueName, getLocalizedCountry } from '@/lib/utils';
@@ -84,6 +84,51 @@ function buildPinHtml(spot: Spot, mode: PinMode, size: number, isActive: boolean
   ">${flagSvg}</div>`;
 }
 
+const PROVINCE_MIN_ZOOM = 6;
+const LOCAL_MIN_ZOOM = 9;
+
+interface SpotCluster {
+  key: string;
+  label: string;
+  icon: string;
+  count: number;
+  bounds: L.LatLngBounds;
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+}
+
+function buildClusters(spots: Spot[], zoom: number, lang: LangCode): SpotCluster[] {
+  const groups = new Map<string, { label: string; icon: string; spots: Spot[] }>();
+  for (const s of spots) {
+    const { name, isEH } = getLocalizedCountry(s, lang);
+    const countryKey = isEH ? 'EH' : s.country_code;
+    const place = zoom >= PROVINCE_MIN_ZOOM ? (s.province ?? s.comarca) : null;
+    const key = place ? `${countryKey}|${place}` : countryKey;
+    const group = groups.get(key) ?? { label: place ?? name, icon: isEH ? '🏴' : flagEmoji(s.country_code), spots: [] };
+    group.spots.push(s);
+    groups.set(key, group);
+  }
+  return Array.from(groups, ([key, g]) => ({
+    key,
+    label: g.label,
+    icon: g.icon,
+    count: g.spots.length,
+    bounds: L.latLngBounds(g.spots.map((s) => [s.latitude, s.longitude] as [number, number])),
+  }));
+}
+
+function clusterPillHtml(c: SpotCluster): string {
+  return `<div style="transform:translate(-50%,-50%);white-space:nowrap">
+    <div class="flex items-center gap-1.5 rounded-full px-3 py-1.5 font-semibold text-xs sm:text-sm shadow-xl transition-transform hover:scale-110 cursor-pointer" style="background:#0f172a;border:2px solid #10b981;color:#ffffff">
+      <span>${c.icon}</span>
+      <span>${escapeHtml(c.label)}</span>
+      <span class="rounded-full px-1.5 text-[11px] font-bold leading-4" style="background:#10b981;color:#0f172a">${c.count}</span>
+    </div>
+  </div>`;
+}
+
 export function MapView({ refreshKey }: { refreshKey?: number }) {
   const { t, lang, focusedSpotId, setFocusedSpotId, focusedAreaBounds, setFocusedAreaBounds, mapLayer, setMapLayer, visitedSpotIds, toggleVisited, savedSpotIds } = useApp();
   const { spots, loading } = useSpots(refreshKey);
@@ -96,6 +141,7 @@ export function MapView({ refreshKey }: { refreshKey?: number }) {
   const [boundsVersion, setBoundsVersion] = useState(0);
   const [pinMode, setPinMode] = useState<PinMode>('flags');
   const [mobileView, setMobileView] = useState<MobileView>('map');
+  const [zoom, setZoom] = useState(INITIAL_ZOOM);
 
   const mapRef = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
@@ -103,6 +149,7 @@ export function MapView({ refreshKey }: { refreshKey?: number }) {
   const cardRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const boundsVersionRef = useRef(0);
   const leftPanelRef = useRef<HTMLDivElement>(null);
+  const clusterLayerRef = useRef<L.LayerGroup | null>(null);
 
   // Init Leaflet map — free OSM tiles, Western Europe center
   useEffect(() => {
@@ -136,6 +183,7 @@ export function MapView({ refreshKey }: { refreshKey?: number }) {
     const resizeTimer = setTimeout(() => m.invalidateSize(), 250);
 
     const onMove = () => {
+      setZoom(m.getZoom());
       boundsVersionRef.current++;
       setBoundsVersion(boundsVersionRef.current);
     };
@@ -214,11 +262,12 @@ export function MapView({ refreshKey }: { refreshKey?: number }) {
   useEffect(() => {
     const m = map.current;
     if (!m) return;
-    const visibleIds = new Set(visibleRankedSpots.map((s) => s.id));
+    const pinned = zoom >= LOCAL_MIN_ZOOM ? visibleRankedSpots : [];
+    const visibleIds = new Set(pinned.map((s) => s.id));
     markersRef.current.forEach((mk, id) => {
       if (!visibleIds.has(id)) { m.removeLayer(mk); markersRef.current.delete(id); }
     });
-    visibleRankedSpots.forEach((s) => {
+    pinned.forEach((s) => {
       const existing = markersRef.current.get(s.id);
       const isActive = hovered === s.id || focusedSpotId === s.id;
       const isVisited = visitedIds.has(s.id);
@@ -248,7 +297,23 @@ export function MapView({ refreshKey }: { refreshKey?: number }) {
         markersRef.current.set(s.id, mk);
       }
     });
-  }, [visibleRankedSpots, hovered, focusedSpotId, visitedIds, savedIds, setFocusedSpotId, lang, pinMode]);
+  }, [visibleRankedSpots, hovered, focusedSpotId, visitedIds, savedIds, setFocusedSpotId, lang, pinMode, zoom]);
+
+  // Country / province cluster pills below the local zoom level
+  useEffect(() => {
+    const m = map.current;
+    if (!m) return;
+    if (!clusterLayerRef.current) clusterLayerRef.current = L.layerGroup().addTo(m);
+    const layer = clusterLayerRef.current;
+    layer.clearLayers();
+    if (zoom >= LOCAL_MIN_ZOOM) return;
+    buildClusters(visibleRankedSpots, zoom, lang).forEach((c) => {
+      const icon = L.divIcon({ className: '', html: clusterPillHtml(c), iconSize: [0, 0] });
+      L.marker(c.bounds.getCenter(), { icon })
+        .on('click', () => m.flyToBounds(c.bounds.pad(0.3), { duration: 0.8, maxZoom: LOCAL_MIN_ZOOM + 1 }))
+        .addTo(layer);
+    });
+  }, [visibleRankedSpots, zoom, lang]);
 
   // Auto-center bounds when visited or saved layer is activated
   useEffect(() => {
